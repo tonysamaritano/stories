@@ -80,6 +80,24 @@ session = Session()
 #     config = Column(String)
 #     owner = Column(String)
 
+class Story(Base):
+    __tablename__ = 'story'
+
+    id = Column(Integer, primary_key=True)
+
+    owner = Column(String)
+
+    request_id = Column(Integer, ForeignKey("story_requests.id"))
+    request = relationship("StoryRequest", uselist=False)
+
+    title = Column(String, default=None)
+    content = Column(String, default=None)
+    img = Column(String, default=None)
+
+    preview = Column(String, default=None)
+    meta = Column(String, default=None)
+
+
 class Pet(Base):
     __tablename__ = 'pet'
 
@@ -109,6 +127,8 @@ class StoryRequest(Base):
 
     backstory = Column(String, default=None)
     details = Column(String, default=None)
+
+    status = Column(String, default="pending")
 
 
 class User(Base):

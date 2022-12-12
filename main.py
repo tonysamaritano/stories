@@ -1,3 +1,4 @@
+import os
 from unittest import result
 from fastapi import FastAPI, Cookie, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -38,6 +39,13 @@ class User(BaseModel):
         orm_mode = True
 
 
+class UserPatch(BaseModel):
+    first_name: Optional[str]
+    last_name: Optional[str]
+    picture: Optional[str]
+    tokens: Optional[int]
+
+
 class PetRequest(BaseModel):
     name: str
     breed: str
@@ -60,7 +68,7 @@ class Pet(PetRequest):
         orm_mode = True
 
 
-class StoryRequest(BaseModel):
+class StoryRequestData(BaseModel):
     adj_0: str
     adj_1: str
     adj_2: str
@@ -68,18 +76,56 @@ class StoryRequest(BaseModel):
     details: Optional[str] = None
 
 
-class Story(StoryRequest):
+class StoryRequest(StoryRequestData):
     id: int
     pet: Pet
     owner: str
+    status: str
 
     class Config:
         orm_mode = True
 
 
-fake_users_db = {
-    "tonysam1@gmail.com": 0
-}
+class StoryRequestPatch(BaseModel):
+    adj_0: Optional[str] = None
+    adj_1: Optional[str] = None
+    adj_2: Optional[str] = None
+    backstory: Optional[str] = None
+    details: Optional[str] = None
+    status:  Optional[str] = None
+
+
+class Story(BaseModel):
+    id: int
+    owner: str
+
+    request: StoryRequest
+
+    img: Optional[str]
+    content: Optional[str]
+    title: Optional[str]
+    preview: Optional[str]
+
+    meta: Optional[str]
+
+    class Config:
+        orm_mode = True
+
+
+class StoryPatch(BaseModel):
+    owner: Optional[str] = None
+    title: Optional[str] = None
+    content: Optional[str] = None
+    img: Optional[str] = None
+    preview: Optional[str] = None
+    meta:  Optional[str] = None
+
+
+class AdminLogin(BaseModel):
+    email: str
+
+
+superuser: str = os.environ.get("SUPERUSER_EMAIL")
 
 app = FastAPI()
 
@@ -113,11 +159,13 @@ async def me(bearer: Optional[str] = Cookie(None)):
 
     assert result is not None
 
+    print(f"{result.first_name} {result.last_name} <{result.email}> logged in")
+
     return User.from_orm(result)
 
 
 @app.post("/{pet_id}/story")
-async def story(pet_id: int, story: StoryRequest, bearer: Optional[str] = Cookie(None)):
+async def story(pet_id: int, story: StoryRequestData, bearer: Optional[str] = Cookie(None)):
     user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
 
     user_result = db.session.query(db.User).filter(
@@ -129,12 +177,13 @@ async def story(pet_id: int, story: StoryRequest, bearer: Optional[str] = Cookie
     if result is None:
         raise HTTPException(status_code=400, detail="Pet doesn't exist!")
 
-    db_story = db.StoryRequest(owner=user_result.email, pet_id=pet_id, **story.dict())
+    db_story = db.StoryRequest(
+        owner=user_result.email, pet_id=pet_id, **story.dict())
     db.session.add(db_story)
     db.session.commit()
     db.session.refresh(db_story)
 
-    return Story.from_orm(db_story)
+    return StoryRequest.from_orm(db_story)
 
 
 @app.get("/story_requests")
@@ -147,7 +196,96 @@ async def story_requests(bearer: Optional[str] = Cookie(None)):
     if result is None:
         raise HTTPException(status_code=404, detail="No Story Requests")
 
+    return [StoryRequest.from_orm(story) for story in result]
+
+
+@app.get("/stories")
+async def story_requests(bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    result = db.session.query(db.Story).filter(
+        db.Story.owner == user["email"]).all()
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="No Story Requests")
+
     return [Story.from_orm(story) for story in result]
+
+
+@app.get("/stories/{story_id}")
+async def story_request(story_id: int, bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    result = db.session.query(db.Story).filter(
+        db.Story.owner == user["email"]).filter(db.Story.id == story_id).first()
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="No Story")
+
+    return Story.from_orm(result)
+
+
+@app.delete("/story_requests/{story_id}")
+async def story_requests(story_id: int, bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    query = db.session.query(db.StoryRequest).filter(
+        db.StoryRequest.owner == user["email"])
+    result = query.filter(db.StoryRequest.id == story_id).first()
+
+    if result is None:
+        raise HTTPException(status_code=403, detail="No Story Requests")
+
+    result = query.filter(db.StoryRequest.id == story_id).delete()
+    db.session.commit()
+
+    return {"deleted": result}
+
+
+@app.post("/story_requests/{story_id}/apply")
+async def story_requests(story_id: int, bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    user_result = db.session.query(db.User).filter(
+        db.User.email == str(user["email"])).first()
+
+    user = User.from_orm(user_result)
+
+    if user.tokens < 1:
+        raise HTTPException(status_code=406, detail="Not enough tokens")
+
+    query = db.session.query(db.StoryRequest).filter(
+        db.StoryRequest.owner == user.email)
+    result = query.filter(db.StoryRequest.id == story_id).first()
+
+    if result is None:
+        raise HTTPException(status_code=403, detail="No Story Requests")
+
+    if result.status != "accepted":
+        raise HTTPException(
+            status_code=403, detail="Story Request already applied to")
+
+    print(f"consuming token {user.tokens}")
+
+    db.session.query(db.User).filter(
+        db.User.email == user.email).update(
+            {db.User.tokens: user.tokens - 1, }
+    )
+    db.session.commit()
+    db.session.refresh(user_result)
+
+    user = User.from_orm(user_result)
+
+    print(f"consumed token {user.tokens}")
+
+    db.session.query(db.StoryRequest).filter(
+        db.StoryRequest.id == story_id).update(
+            {db.StoryRequest.status: "in_progress"}
+    )
+    db.session.commit()
+    db.session.refresh(result)
+
+    return result
 
 
 @app.post("/pet")
@@ -213,11 +351,6 @@ async def pet(pet_id: int, pet: PetPatch, bearer: Optional[str] = Cookie(None)):
     )
     db.session.commit()
 
-    # db.session.add(db_pet)
-    # db.session.commit()
-
-    # return Pet.from_orm(db_pet)
-
     return Pet(**pet_updated)
 
 
@@ -231,7 +364,7 @@ async def get_pet(bearer: Optional[str] = Cookie(None)):
     query = db.session.query(db.Pet).filter(
         db.Pet.owner_id == user_result.id).all()
 
-    return [Pet.from_orm(pet) for pet in query]
+    return [Pet.from_orm(pet) for pet in query] if len(query) > 0 else None
 
 
 @app.post("/login")
@@ -288,6 +421,9 @@ async def logout():
 async def webhook(stripe_webhook: Request):
     data = await stripe_webhook.json()
 
+    if data["type"] != "checkout.session.completed":
+        return {"status": "success"}
+
     email: str = data["data"]["object"]["customer_email"]
 
     result = db.session.query(db.User).filter(
@@ -297,8 +433,6 @@ async def webhook(stripe_webhook: Request):
 
     line_items = stripe.checkout.Session.list_line_items(
         data["data"]["object"]["id"], limit=5)
-
-    # print(line_items)
 
     qty = 0
     for item in line_items["data"]:
@@ -314,3 +448,230 @@ async def webhook(stripe_webhook: Request):
     db.session.commit()
 
     return {"message": "Webhook!"}
+
+
+@app.post("/admin/login")
+async def login(login: AdminLogin, bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    if user["email"] != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    result = db.session.query(db.User).filter(
+        db.User.email == login.email).first()
+
+    encoded_jwt = jwt.encode({
+        "email": result.email,
+        "first_name": result.first_name,
+        "last_name": result.last_name,
+        "picture": result.picture,
+    }, SECRET_KEY, algorithm=ALGORITHM)
+
+    response = JSONResponse(content={"email": result.email})
+    response.set_cookie(
+        key="bearer",
+        value=encoded_jwt,
+        httponly=True,
+        secure=True)
+
+    return response
+
+
+@app.get("/admin/pets")
+async def get_pets(bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    if user["email"] != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    return db.session.query(db.Pet).all()
+
+
+@app.get("/admin/users")
+async def get_pets(bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    if user["email"] != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    return db.session.query(db.User).all()
+
+
+@app.get("/admin/story_requests")
+async def get_pets(bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    if user["email"] != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    return db.session.query(db.StoryRequest).all()
+
+
+@app.get("/admin/stories")
+async def get_stories(bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    if user["email"] != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    result = db.session.query(db.Story).all()
+
+    return [Story.from_orm(story) for story in result]
+
+
+@app.get("/admin/story/{story_id}")
+async def get_stories(story_id: int, bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    if user["email"] != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    result = db.session.query(db.Story).filter(db.Story.id == story_id).first()
+
+    return Story.from_orm(result)
+
+
+@app.post("/admin/story/{story_request_id}")
+async def get_stories(story_request_id: int, bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    if user["email"] != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    result = db.session.query(db.StoryRequest).filter(
+        db.StoryRequest.id == story_request_id).first()
+
+    if result is None:
+        raise HTTPException(
+            status_code=400, detail="Story Request doesn't exist!")
+
+    db_story = db.Story(
+        owner=superuser, request_id=story_request_id)
+    db.session.add(db_story)
+    db.session.commit()
+    db.session.refresh(db_story)
+
+    return db_story
+
+
+@app.patch("/admin/story_requests/{story_request_id}")
+async def patch_story_request(story_request_id: int, story_request: StoryRequestPatch, bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    if user["email"] != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    result = db.session.query(db.StoryRequest).filter(
+        db.StoryRequest.id == story_request_id).first()
+
+    if result is None:
+        raise HTTPException(
+            status_code=400, detail="Story Request doesn't exist!")
+
+    updated = {
+        **StoryRequest.from_orm(result).dict(),
+        **story_request.dict(exclude_none=True)
+    }
+
+    query = db.session.query(db.StoryRequest).filter(
+        db.StoryRequest.id == story_request_id)
+    query.update({
+        db.StoryRequest.status: updated["status"]
+    })
+    db.session.commit()
+    db.session.refresh(result)
+
+    return result
+
+
+@app.patch("/admin/user/{user_id}")
+async def patch_user(user_id: int, user_patch: UserPatch, bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    if user["email"] != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    result = db.session.query(db.User).filter(db.User.id == user_id).first()
+
+    if result is None:
+        raise HTTPException(
+            status_code=400, detail="User doesn't exist!")
+
+    updated = {
+        **User.from_orm(result).dict(),
+        **user_patch.dict(exclude_none=True)
+    }
+
+    query = db.session.query(db.User).filter(
+        db.User.id == user_id)
+    query.update({
+        db.User.tokens: updated["tokens"],
+    })
+    db.session.commit()
+    db.session.refresh(result)
+
+    return result
+
+
+@app.patch("/admin/pet/{pet_id}")
+async def patch_pet(pet_id: int, pet_patch: PetPatch, bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    if user["email"] != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    result = db.session.query(db.Pet).filter(db.Pet.id == pet_id).first()
+
+    if result is None:
+        raise HTTPException(
+            status_code=400, detail="User doesn't exist!")
+
+    updated = {
+        **Pet.from_orm(result).dict(),
+        **pet_patch.dict(exclude_none=True)
+    }
+
+    query = db.session.query(db.Pet).filter(
+        db.Pet.id == pet_id)
+    query.update({
+        db.Pet.photo: updated["photo"],
+    })
+    db.session.commit()
+    db.session.refresh(result)
+
+    return result
+
+
+@app.patch("/admin/story/{story_id}")
+async def patch_story(story_id: int, story_patch: StoryPatch, bearer: Optional[str] = Cookie(None)):
+    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+
+    if user["email"] != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    result = db.session.query(db.Story).filter(db.Story.id == story_id).first()
+
+    if result is None:
+        raise HTTPException(
+            status_code=400, detail="User doesn't exist!")
+
+    updated = {
+        **Story.from_orm(result).dict(),
+        **story_patch.dict(exclude_none=True)
+    }
+
+    query = db.session.query(db.Story).filter(
+        db.Story.id == story_id)
+    query.update({
+        db.Story.owner: updated["owner"],
+        db.Story.title: updated["title"],
+        db.Story.content: updated["content"],
+        db.Story.preview: updated["preview"],
+        db.Story.img: updated["img"],
+        db.Story.meta: updated["meta"],
+
+    })
+    db.session.commit()
+    db.session.refresh(result)
+
+    return result
