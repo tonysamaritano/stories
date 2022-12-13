@@ -130,7 +130,7 @@ superuser: str = os.environ.get("SUPERUSER_EMAIL")
 app = FastAPI()
 
 origins = [
-    "https://dev.tonysamaritano.com",
+    "https://www.petlegendary.com",
 ]
 
 app.add_middleware(
@@ -207,7 +207,10 @@ async def story_requests(bearer: Optional[str] = Cookie(None)):
 
 @app.get("/stories")
 async def story_requests(bearer: Optional[str] = Cookie(None)):
-    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+    try:
+        user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+    except:
+        raise HTTPException(status_code=401, detail="Not Logged In")
 
     result = db.session.query(db.Story).filter(
         db.Story.owner == user["email"]).all()
@@ -220,7 +223,10 @@ async def story_requests(bearer: Optional[str] = Cookie(None)):
 
 @app.get("/stories/{story_id}")
 async def story_request(story_id: int, bearer: Optional[str] = Cookie(None)):
-    user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+    try:
+        user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
+    except:
+        raise HTTPException(status_code=401, detail="Not Logged In")
 
     result = db.session.query(db.Story).filter(db.Story.id == story_id).first()
 
@@ -657,6 +663,9 @@ async def patch_pet(pet_id: int, pet_patch: PetPatch, bearer: Optional[str] = Co
     query = db.session.query(db.Pet).filter(
         db.Pet.id == pet_id)
     query.update({
+        db.Pet.name: updated["name"],
+        db.Pet.breed: updated["breed"],
+        db.Pet.gender: updated["gender"],
         db.Pet.photo: updated["photo"],
     })
     db.session.commit()
