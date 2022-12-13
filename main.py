@@ -177,13 +177,19 @@ async def story(pet_id: int, story: StoryRequestData, bearer: Optional[str] = Co
     if result is None:
         raise HTTPException(status_code=400, detail="Pet doesn't exist!")
 
-    db_story = db.StoryRequest(
+    db_story_request = db.StoryRequest(
         owner=user_result.email, pet_id=pet_id, **story.dict())
+    db.session.add(db_story_request)
+    db.session.commit()
+    db.session.refresh(db_story_request)
+
+    db_story = db.Story(owner=user_result.email,
+                        request_id=db_story_request.id)
+
     db.session.add(db_story)
     db.session.commit()
-    db.session.refresh(db_story)
 
-    return StoryRequest.from_orm(db_story)
+    return StoryRequest.from_orm(db_story_request)
 
 
 @app.get("/story_requests")
@@ -216,11 +222,22 @@ async def story_requests(bearer: Optional[str] = Cookie(None)):
 async def story_request(story_id: int, bearer: Optional[str] = Cookie(None)):
     user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
 
-    result = db.session.query(db.Story).filter(
-        db.Story.owner == user["email"]).filter(db.Story.id == story_id).first()
+    result = db.session.query(db.Story).filter(db.Story.id == story_id).first()
 
     if result is None:
         raise HTTPException(status_code=404, detail="No Story")
+
+    if result.meta:
+        try:
+            meta = json.loads(result.meta)
+
+            if meta["public"] == True:
+                return Story.from_orm(result)
+        except:
+            pass
+
+    if result.owner != user["email"]:
+        raise HTTPException(status_code=403, detail="Unauthorized")
 
     return Story.from_orm(result)
 
@@ -356,6 +373,9 @@ async def pet(pet_id: int, pet: PetPatch, bearer: Optional[str] = Cookie(None)):
 
 @app.get("/pets")
 async def get_pet(bearer: Optional[str] = Cookie(None)):
+    if bearer is None:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
     user = jwt.decode(bearer, SECRET_KEY, algorithms=[ALGORITHM])
 
     user_result = db.session.query(db.User).filter(
@@ -576,6 +596,9 @@ async def patch_story_request(story_request_id: int, story_request: StoryRequest
     query = db.session.query(db.StoryRequest).filter(
         db.StoryRequest.id == story_request_id)
     query.update({
+        db.StoryRequest.adj_0: updated["adj_0"],
+        db.StoryRequest.adj_1: updated["adj_1"],
+        db.StoryRequest.adj_2: updated["adj_2"],
         db.StoryRequest.status: updated["status"]
     })
     db.session.commit()
