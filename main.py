@@ -687,3 +687,20 @@ async def patch_story(story_id: int, story_patch: StoryPatch, user: User = Secur
     db.session.refresh(result)
 
     return result
+
+@app.get("/admin/export")
+async def patch_story(user: User = Security(get_current_user)):
+    if user.email != superuser:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+
+    users = db.session.query(db.User).all()
+    requests = db.session.query(db.StoryRequest).all()
+    pets = db.session.query(db.Pet).all()
+    stories = db.session.query(db.Story).all()
+
+    return {
+        "users": users,
+        "requests": requests,
+        "pets": pets,
+        "stories": stories
+    }
