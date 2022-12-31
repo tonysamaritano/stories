@@ -398,12 +398,13 @@ class Setting:
     time: str
     details: List[str]
 
-class Scene:
+class Plot:
     characters: List[Character]
     conflict: List[Conflict]
     action: List[Action]
     emotion: List[Emotion]
-    plot: Union[ThreeActPlot, FiveActPlot, SevenActPlot, HeroJourneyPlot] # can expand this to include other plot structures
+    plot: List[Plot]
+    structure: Union[ThreeActPlot, FiveActPlot, SevenActPlot, HeroJourneyPlot] # can expand this to include other plot structures
     dialogue: List[Dialogue] # allows for multiple dialogues in a scene
     setting: Setting # I don't think this would need to be a list
 ```
